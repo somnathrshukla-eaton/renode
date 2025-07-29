@@ -36,4 +36,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts-app
-          path: ${{ github.workspace }}/renode/renode/src/Infrastructure/src/*.dll
+          path: ${{ github.workspace }}/renode/src/Infrastructure/src/*.dll
