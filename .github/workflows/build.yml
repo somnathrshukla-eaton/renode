@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Instal depedencie
+   
       
              # ---------------------------
       # MinGW-w64 8.1.0 (x86_64, win32, sjlj)
