@@ -16,17 +16,130 @@ jobs:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
     # You can convert this to a matrix build if you need cross-platform coverage.
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-    runs-on: ubuntu-latest
+    runs-on: windows-2022   # always follow GitHub’s “latest” Windows image
+    
+    env:
+          # >>> Update versions here when needed <<<
+          PY_VERSION: '3.13.6'         # from python.org (Release Date: 2025-08-06)
+          CMAKE_VERSION: '4.0.3'       # latest stable on cmake.org; can use 4.1.0 if you prefer
+
     steps:
       - uses: actions/checkout@v4
       - name: Instal depedencie
       
+             # ---------------------------
+      # MinGW-w64 8.1.0 (x86_64, win32, sjlj)
+      # ---------------------------
+      - name: Download MinGW-w64 8.1.0 (x86_64, win32, sjlj)
+        shell: pwsh
         run: |
-          sudo apt update
-          sudo apt install git automake cmake autoconf libtool g++ coreutils policykit-1 \
-          libgtk-3-dev uml-utilities gtk-sharp3 python3 python3-pip
-          sudo apt-get install ruby ruby-dev rpm 'bsdtar|libarchive-tools'
-          sudo gem install fpm
+          $url  = 'https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win64/Personal%20Builds/mingw-builds/8.1.0/threads-win32/sjlj/x86_64-8.1.0-release-win32-sjlj-rt_v6-rev0.7z/download'
+          $dest = "$env:RUNNER_TEMP\mingw.7z"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Write-Host "Downloaded MinGW to $dest"
+        # Source: official MinGW-w64 personal builds download link
+        # (x86_64, threads-win32, sjlj) 
+        # [9](https://github.com/adamdriscoll/pwsh-github-actions)
+
+      - name: Extract MinGW (7-Zip)
+        shell: pwsh
+        run: |
+          $archive = "$env:RUNNER_TEMP\mingw.7z"
+          $target  = 'C:\mingw-w64'
+          if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target | Out-Null }
+          & 'C:\Program Files\7-Zip\7z.exe' x $archive "-o$target" -y | Out-Null
+          Write-Host "Extracted to $target"
+        # 7-Zip is preinstalled on GitHub's Windows runner image. [10](https://github.com/rcpacini/mingw-w64)
+
+      - name: Add MinGW to PATH
+        shell: pwsh
+        run: |
+          $mingwBin = 'C:\mingw-w64\x86_64-8.1.0-release-win32-sjlj-rt_v6-rev0\mingw64\bin'
+          if (-not (Test-Path $mingwBin)) { throw "Missing expected MinGW bin path: $mingwBin" }
+          $mingwBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "Added to PATH: $mingwBin"
+        # Using $GITHUB_PATH ensures PATH is available to subsequent steps. [3](https://windowsforum.com/threads/github-actions-updates-new-apis-windows-server-2025-migration-for-devops-success.375507/)
+
+      # ---------------------------
+      # Python 3 (from python.org)
+      # ---------------------------
+      - name: Download Python ${{ env.PY_VERSION }} (64-bit)
+        shell: pwsh
+        run: |
+          $pyVer = "${{ env.PY_VERSION }}"
+          $url   = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-amd64.exe"
+          $dest  = "$env:RUNNER_TEMP\python-${{ env.PY_VERSION }}-amd64.exe"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Write-Host "Downloaded: $dest"
+        # Python Windows installers are published on python.org per release. [11](https://blog.csdn.net/alwmp/article/details/128659784)[6](https://www.python.org/downloads/)
+
+      - name: Install Python (quiet, all users, add to PATH)
+        shell: pwsh
+        run: |
+          $installer = "$env:RUNNER_TEMP\python-${{ env.PY_VERSION }}-amd64.exe"
+          # Silent install + add to PATH + all users
+          & $installer /quiet InstallAllUsers=1 PrependPath=1 Include_test=0
+        # Python’s Windows installer supports silent flags & PrependPath option. [1](https://stackoverflow.com/questions/60169752/how-to-update-the-path-in-a-github-action-workflow-file-for-a-windows-latest-hos)
+
+      - name: Append Python dirs to PATH for this job & verify
+        shell: pwsh
+        run: |
+          # Use the Python Launcher to discover the actual install dir (robust across versions)
+          $pyDir = & py -3 -c "import sys,os; print(os.path.dirname(sys.executable))"
+          if (-not (Test-Path $pyDir)) { throw "Python directory not found: $pyDir" }
+
+          ($pyDir)           | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          (Join-Path $pyDir 'Scripts') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          python --version
+          pip --version
+        # Even though the installer edits PATH, we append to $GITHUB_PATH so subsequent steps see it immediately. [3](https://windowsforum.com/threads/github-actions-updates-new-apis-windows-server-2025-migration-for-devops-success.375507/)
+
+      # ---------------------------
+      # CMake (from cmake.org / Kitware)
+      # ---------------------------
+      - name: Download CMake ${{ env.CMAKE_VERSION }} (x64 MSI)
+        shell: pwsh
+        run: |
+          $ver  = "${{ env.CMAKE_VERSION }}"
+          $url  = "https://github.com/Kitware/CMake/releases/download/v$ver/cmake-$ver-windows-x86_64.msi"
+          $dest = "$env:RUNNER_TEMP\cmake-$ver-x64.msi"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Write-Host "Downloaded: $dest"
+        # Official CMake downloads & release assets. [7](https://cmake.org/download/)[8](https://github.com/Kitware/CMake/releases)
+
+      - name: Install CMake silently & add to PATH
+        shell: pwsh
+        run: |
+          $msi = "$env:RUNNER_TEMP\cmake-${{ env.CMAKE_VERSION }}-x64.msi"
+          # /qn: quiet; ADD_CMAKE_TO_PATH=System adds CMake\bin to PATH at machine scope
+          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$msi`" ALLUSERS=1 ADD_CMAKE_TO_PATH=System /qn"
+
+          # Ensure current job sees it immediately:
+          $cmakeBinPaths = @('C:\Program Files\CMake\bin','C:\Program Files (x86)\CMake\bin')
+          $found = $false
+          foreach ($p in $cmakeBinPaths) {
+            if (Test-Path (Join-Path $p 'cmake.exe')) {
+              $p | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              $found = $true
+              break
+            }
+          }
+          if (-not $found) { Write-Warning "CMake bin not found in default locations; relying on PATH from MSI." }
+
+          cmake --version
+        # Silent MSI install with ADD_CMAKE_TO_PATH=System; ensure availability via $GITHUB_PATH. [2](https://discourse.cmake.org/t/cmake-silent-install-with-options-help/1475/1)[3](https://windowsforum.com/threads/github-actions-updates-new-apis-windows-server-2025-migration-for-devops-success.375507/)
+
+      # ---------------------------
+      # Quick smoke test with MinGW + CMake + Python
+      # ---------------------------
+      - name: Verify MinGW, CMake, Python on PATH
+        shell: pwsh
+        run: |
+          where gcc
+          gcc --version
+          cmake --version
+          python --version
 
 
       - name: Run build
